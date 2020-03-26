@@ -1,7 +1,5 @@
 .DS_Store
 
-# Data Files
-
-*.pickle # Pickle Python Objects
-*.joblib # ML Models
+data/
+models/
 
