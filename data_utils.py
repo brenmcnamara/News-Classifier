@@ -86,6 +86,24 @@ class WordTokenDatasetSample():
     def __len__(self):
         return len(self.label)
 
+    def create_uniform_weights(self):
+        if len(self) == 0:
+            return torch.FloatTensor([])
+
+        weights = torch.zeros_like(self.sequence, dtype=torch.float)
+
+        offset_with_end = torch.cat(
+            [self.offset, torch.LongTensor([len(self.sequence)])])
+
+        for i in range(len(offset_with_end) - 1):
+            start = offset_with_end[i].item()
+            end = offset_with_end[i+1].item()
+            weight = 1. / (end - start)
+
+            weights[start:end] = weight
+
+        return weights
+
 
 class WordTokenDataset(Dataset):
     __TOKEN_UNK__ = '__TOKEN_UNK__'
