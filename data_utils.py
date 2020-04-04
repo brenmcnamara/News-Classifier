@@ -76,12 +76,71 @@ def create_unigram_counts(rows):
     return counts
 
 
+class WordEmbeddingEncoding():
+    def __init__(self, data, embeddings, min_word_freq=0):
+        self.data = data
+        self.embeddings = embeddings
+        self.min_word_freq = min_word_freq
+        self.vocab_size = len(embeddings)
+
+        self._is_prepared = False
+        self._embedding_tokens = None
+        self._unigram_counts = None
+        self._token_encoder = None
+        self._label_encoder = None
+
+    def prepare(self):
+        self._embedding_tokens = {t for t in self.embeddings.index}
+
+        tokenized_rows = tokenize_rows(self.data)
+        self._unigram_counts = create_unigram_counts(tokenized_rows)
+
+        # Filter out any tokens that are invalid.
+        tokenized_rows = [
+            [t for t in tokens if self.is_valid_token(t)] for tokens in tokenized_rows]
+
+        # Need to re-generate the unigram counts after
+        # performing this filtering.
+        self._unigram_counts = create_unigram_counts(tokenized_rows)
+
+        self._token_encoder = {t: i for i,
+                               t in enumerate(self.embeddings.index)}
+        self._label_encoder = {l: i for i, l in enumerate(
+            self.data['category'].unique())}
+
+        self._is_prepared = True
+
+    def encode_token(self, token):
+        assert(self._is_prepared)
+        return self._token_encoder[token]
+
+    def encode_label(self, label):
+        assert(self._is_prepared)
+        return self._label_encoder[label]
+
+    def n_classes(self):
+        assert(self._is_prepared)
+        return len(self._label_encoder)
+
+    def is_valid_token(self, token):
+        assert(self._embedding_tokens is not None)
+        assert(self._unigram_counts is not None)
+
+        if token not in self._embedding_tokens:
+            return False
+        elif token not in self._unigram_counts or self._unigram_counts[token] < self.min_word_freq:
+            return False
+        return True
+
+
 class WordTokenDatasetSample():
-    def __init__(self, sequence, offset, label, vocab_size):
+    def __init__(self, sequence, offset, label, vocab_size, doc_count, doc_freq):
         self.sequence = sequence
         self.offset = offset
         self.label = label
         self.vocab_size = vocab_size
+        self.doc_count = doc_count
+        self.doc_freq = doc_freq
 
     def __len__(self):
         return len(self.label)
@@ -104,44 +163,59 @@ class WordTokenDatasetSample():
 
         return weights
 
+    def create_tf_idf_weights(self):
+        if len(self) == 0:
+            return torch.FloatTensor([])
+
+        weights = torch.zeros_like(self.sequence, dtype=torch.float)
+
+        offset_with_end = torch.cat(
+            [self.offset, torch.LongTensor([len(self.sequence)])])
+        idf = torch.log(torch.FloatTensor(
+            [float(self.doc_count) / self.doc_freq[idx.item()] for idx in self.sequence]))
+
+        for i in range(len(offset_with_end) - 1):
+            start = offset_with_end[i].item()
+            end = offset_with_end[i+1].item()
+            doc_len = end - start
+
+            # Generate term frequencies for each element in sequence.
+            freq_map = {}
+            for idx in self.sequence[start:end]:
+                if idx not in freq_map:
+                    freq_map[idx.item()] = 1
+                else:
+                    freq_map[idx.item()] += 1
+
+            tf = torch.FloatTensor(
+                [float(freq_map[idx.item()]) / doc_len for idx in self.sequence[start:end]])
+            tf_idf = tf * idf[start:end]
+
+            # normalize tf_idf weights between documents to account for
+            # documents of very different sizes.
+            total = torch.sum(tf_idf)
+
+            weights[start:end] = tf_idf / total
+
+        return weights
+
 
 class WordTokenDataset(Dataset):
-    __TOKEN_UNK__ = '__TOKEN_UNK__'
-
-    __TOKEN_LOW_FREQ__ = '__TOKEN_LOW_FREQ__'
-
-    def __init__(self, data, downsample_c=None, accepted_tokens=None, include_special_tokens=False, min_word_freq=0):
+    def __init__(self, data, encoding):
         """
         data: A pandas data frame where each row is a news article.
 
-        downsample_c: An optional downsampling constant. This downsampling constant configures
-                      the downsampling of imbalanced classifications.
-
-        accepted_tokens: Can optionally specify a set of tokens that are recognized by the
-                         dataset. If specified, any tokens not in this set will be assigned
-                         to the special unknown token.
-
-        include_special_tokens: Whether to include special tokens in the final data samples.
-                                This includes the unknown special token and the low freq token.
-
-        min_word_freq: The minimum frequency allows for any word in the data corpus. Any word
-                       with a frequency less than the min frequency will get mapped to the
-                       low frequency token.
+        encoding: The word token encoding that contains information
+                  about the corpus and the encoding of words
+                  and labels.
         """
 
         super().__init__()
-
         self.data = data
-        self.downsample_c = downsample_c
-        self.accepted_tokens = accepted_tokens
-        self.include_special_tokens = include_special_tokens
-        self.min_word_freq = min_word_freq
+        self.encoding = encoding
 
         self._is_prepared = False
-        self._unigram_counts = None
-        self._token_encoder = None
-        self._encoded_to_idx = None
-        self._label_encoder = None
+        self._doc_freq = None
 
     def __len__(self):
         return len(self.data)
@@ -158,7 +232,9 @@ class WordTokenDataset(Dataset):
             return WordTokenDatasetSample(sequence=torch.LongTensor([]),
                                           offset=torch.LongTensor([]),
                                           label=torch.LongTensor([]),
-                                          vocab_size=len(self._encoded_to_idx))
+                                          vocab_size=self.encoding.vocab_size,
+                                          doc_count=len(self.data),
+                                          doc_freq=self._doc_freq)
 
         tokenized_rows = tokenize_rows(sub_data)
 
@@ -166,63 +242,47 @@ class WordTokenDataset(Dataset):
         sequence = []
 
         for i, tokens in enumerate(tokenized_rows):
-            sub_sequence = [self._encoded_to_idx[self._token_encoder[t]]
-                            for t in tokens if t in self._encoded_to_idx]
+            sub_sequence = [self.encoding.encode_token(
+                t) for t in tokens if self.encoding.is_valid_token(t)]
             sequence.extend(sub_sequence)
             offset.append(len(sequence) - len(sub_sequence))
 
-        label = [self._label_encoder[l] for l in sub_data['category']]
+        label = [self.encoding.encode_label(l) for l in sub_data['category']]
 
         return WordTokenDatasetSample(sequence=torch.LongTensor(sequence),
                                       offset=torch.LongTensor(offset),
                                       label=torch.LongTensor(label),
-                                      vocab_size=len(self._encoded_to_idx))
+                                      vocab_size=self.encoding.vocab_size,
+                                      doc_count=len(self.data),
+                                      doc_freq=self._doc_freq)
 
     def prepare(self):
-        if self.downsample_c is not None:
-            self.data = downsample(self.data, self.downsample_c)
-
         tokenized_rows = tokenize_rows(self.data)
 
-        self._unigram_counts = create_unigram_counts(tokenized_rows)
+        doc_freq = {}
+        for i, tokens in enumerate(tokenized_rows):
+            new_tokens = [t for t in tokens if self.encoding.is_valid_token(t)]
+            tokenized_rows[i] = new_tokens
 
-        if not self.include_special_tokens:
-            # Filter out any tokens that do not get encoded into themselves.
-            tokenized_rows = [[t for t in tokens if self._encoded_token(
-                t) == t] for tokens in tokenized_rows]
-            # Need to re-generate the unigram counts after
-            # performing this filtering.
-            self._unigram_counts = create_unigram_counts(tokenized_rows)
+            seen = set()
+            for token in new_tokens:
+                if token in seen:
+                    continue
 
-        self._token_encoder = {t: self._encoded_token(
-            t) for t in self._unigram_counts.keys()}
-        self._encoded_to_idx = {t: i for i,
-                                t in enumerate(self._token_encoder.values())}
-        self._label_encoder = {l: i for i, l in enumerate(
-            self.data['category'].unique())}
+                idx = self.encoding.encode_token(token)
+                if idx not in doc_freq:
+                    doc_freq[idx] = 1
+                else:
+                    doc_freq[idx] += 1
 
-        # Remove any rows in data that have no tokens.
-        keep_mask = np.zeros(len(tokenized_rows))
-        for i, ts in enumerate(tokenized_rows):
-            # This will be true if there exists a token that is encoded into itself.
-            # (i.e. not an unknown token or low freq token).
-            keep_mask[i] = len(
-                [True for t in ts if self._encoded_token(t) == t]) > 0
+                seen.add(token)
 
-        keep_mask = keep_mask.astype(bool)
+        # Remove any token rows that are empty.
+        keep_mask = np.array([len(ts) > 0 for ts in tokenized_rows])
+
         self.data = self.data.iloc[keep_mask]
+        self._doc_freq = doc_freq
         self._is_prepared = True
-
-    def _encoded_token(self, token):
-        assert(self._unigram_counts is not None)
-
-        if self.accepted_tokens is not None and token not in self.accepted_tokens:
-            return self.__TOKEN_UNK__
-        elif token not in self._unigram_counts:
-            return self.__TOKEN_UNK__
-        elif self._unigram_counts[token] < self.min_word_freq:
-            return self.__TOKEN_LOW_FREQ__
-        return token
 
 
 def collate_samples(samples):
@@ -230,18 +290,21 @@ def collate_samples(samples):
         return WordTokenDatasetSample(sequence=torch.LongTensor([]),
                                       offset=torch.LongTensor([]),
                                       label=torch.LongTensor([]),
-                                      vocab_size=0)
+                                      vocab_size=0,
+                                      doc_freq={},
+                                      doc_count=0)
 
     label = torch.cat([s.label for s in samples])
     sequence = torch.cat([s.sequence for s in samples])
     vocab_size = samples[0].vocab_size
+    doc_freq = samples[0].doc_freq
+    doc_count = samples[0].doc_count
 
     offset = torch.zeros_like(label, dtype=torch.int64)
     iter = 0
     shift_val = 0
 
     for i, sample in enumerate(samples):
-        print(iter)
         sample_offset = sample.offset
         offset[iter:(iter+len(sample_offset))] = (sample_offset + shift_val)
 
@@ -251,4 +314,6 @@ def collate_samples(samples):
     return WordTokenDatasetSample(sequence=sequence,
                                   offset=offset,
                                   label=label,
-                                  vocab_size=vocab_size)
+                                  vocab_size=vocab_size,
+                                  doc_freq=doc_freq,
+                                  doc_count=doc_count)
