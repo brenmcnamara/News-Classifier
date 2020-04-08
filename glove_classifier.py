@@ -9,7 +9,7 @@ from data_utils import WordEmbeddingEncoding, WordTokenDataset
 from time import time
 from torch.utils.data import Dataset, DataLoader
 
-EPOCHS = 25
+EPOCHS = 15
 
 def main():
 
@@ -40,12 +40,12 @@ def main():
     hyperparams_list = [
         {'weighting': 'uniform', 'lr': 0.001,  'batch_size': 100},
         {'weighting': 'uniform', 'lr': 0.01,   'batch_size': 100},
-        {'weighting': 'uniform', 'lr': 0.001,  'batch_size': 10},
-        {'weighting': 'uniform', 'lr': 0.01,   'batch_size': 10},
+        {'weighting': 'uniform', 'lr': 0.001,  'batch_size': 50},
+        {'weighting': 'uniform', 'lr': 0.01,   'batch_size': 50},
         {'weighting': 'tf_idf',  'lr': 0.001,  'batch_size': 100},
         {'weighting': 'tf_idf',  'lr': 0.01,   'batch_size': 100},
-        {'weighting': 'tf_idf',  'lr': 0.001,  'batch_size': 10},
-        {'weighting': 'tf_idf',  'lr': 0.01,   'batch_size': 10},
+        {'weighting': 'tf_idf',  'lr': 0.001,  'batch_size': 50},
+        {'weighting': 'tf_idf',  'lr': 0.01,   'batch_size': 50},
     ]
 
     class Model(torch.nn.Module):

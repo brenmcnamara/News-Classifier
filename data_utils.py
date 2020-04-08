@@ -76,6 +76,56 @@ def create_unigram_counts(rows):
     return counts
 
 
+class BOWEncoding():
+    LOW_FREQ_TOKEN = '__LOW_FREQ_TOKEN__'
+
+    def __init__(self, data, min_word_freq=0):
+        self.data = data
+        self.min_word_freq = min_word_freq
+
+        self._is_prepared = False
+        self.vocab_size = None
+        self._label_encoder = None
+        self._token_encoder = None
+        self._token_decoder = None
+
+    def prepare(self):
+        tokenized_rows = tokenize_rows(self.data)
+        unigram_counts = create_unigram_counts(tokenized_rows)
+
+        if self.min_word_freq > 0:
+            tokenized_rows = [[t if unigram_counts[t] >=
+                               self.min_word_freq else self.LOW_FREQ_TOKEN for t in tokens] for tokens in tokenized_rows]
+            unigram_counts = create_unigram_counts(tokenized_rows)
+
+        self._unigram_counts = unigram_counts
+        self._label_encoder = {l: i for i, l in enumerate(
+            self.data['category'].unique())}
+        self._token_encoder = {t: i for i,
+                               t in enumerate(unigram_counts.keys())}
+        self._token_decoder = {i: t for t, i in self._token_encoder.items()}
+
+        self.vocab_size = len(unigram_counts)
+
+        self._is_prepared = True
+
+    def encode_token(self, token):
+        assert(self._is_prepared)
+        return self._token_encoder[token]
+
+    def encode_label(self, label):
+        assert(self._is_prepared)
+        return self._label_encoder[label]
+
+    def n_classes(self):
+        assert(self._is_prepared)
+        return len(self._label_encoder)
+
+    def is_valid_token(self, token):
+        assert(self._is_prepared)
+        return token in self._token_encoder
+
+
 class WordEmbeddingEncoding():
     def __init__(self, data, embeddings, min_word_freq=0):
         self.data = data
@@ -144,6 +194,21 @@ class WordTokenDatasetSample():
 
     def __len__(self):
         return len(self.label)
+
+    def create_bow_matrix(self):
+        bow = torch.zeros(
+            size=(len(self.offset), self.vocab_size), dtype=torch.int64)
+        offset_with_end = torch.cat(
+            [self.offset, torch.LongTensor([len(self.sequence)])])
+
+        for i in range(len(offset_with_end) - 1):
+            start = offset_with_end[i].item()
+            end = offset_with_end[i+1]
+            sub_seq = self.sequence[start:end]
+            for idx in sub_seq:
+                bow[i, idx.item()] += 1
+
+        return bow
 
     def create_uniform_weights(self):
         if len(self) == 0:
