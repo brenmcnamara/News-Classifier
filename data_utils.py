@@ -77,6 +77,8 @@ def create_unigram_counts(rows):
 
 
 class BOWEncoding():
+    encoding_type = 'bow'
+
     LOW_FREQ_TOKEN = '__LOW_FREQ_TOKEN__'
 
     def __init__(self, data, min_word_freq=0):
@@ -86,6 +88,7 @@ class BOWEncoding():
         self._is_prepared = False
         self.vocab_size = None
         self._label_encoder = None
+        self._label_decoder = None
         self._token_encoder = None
         self._token_decoder = None
 
@@ -101,6 +104,7 @@ class BOWEncoding():
         self._unigram_counts = unigram_counts
         self._label_encoder = {l: i for i, l in enumerate(
             self.data['category'].unique())}
+        self._label_decoder = {i: l for l, i in self._label_encoder.items()}
         self._token_encoder = {t: i for i,
                                t in enumerate(unigram_counts.keys())}
         self._token_decoder = {i: t for t, i in self._token_encoder.items()}
@@ -117,6 +121,14 @@ class BOWEncoding():
         assert(self._is_prepared)
         return self._label_encoder[label]
 
+    def decode_label(self, label_idx):
+        assert(self._is_prepared)
+        return self._label_decoder[label_idx]
+
+    def n_inputs(self):
+        assert(self._is_prepared)
+        return self.vocab_size
+
     def n_classes(self):
         assert(self._is_prepared)
         return len(self._label_encoder)
@@ -127,6 +139,8 @@ class BOWEncoding():
 
 
 class WordEmbeddingEncoding():
+    encoding_type = 'embedding'
+
     def __init__(self, data, embeddings, min_word_freq=0):
         self.data = data
         self.embeddings = embeddings
@@ -168,6 +182,10 @@ class WordEmbeddingEncoding():
         assert(self._is_prepared)
         return self._label_encoder[label]
 
+    def n_inputs(self):
+        assert(self._is_prepared)
+        return len(self._token_encoder)
+
     def n_classes(self):
         assert(self._is_prepared)
         return len(self._label_encoder)
@@ -181,6 +199,7 @@ class WordEmbeddingEncoding():
         elif token not in self._unigram_counts or self._unigram_counts[token] < self.min_word_freq:
             return False
         return True
+
 
 
 class WordTokenDatasetSample():
