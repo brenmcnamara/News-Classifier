@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import time
 
+from guppy import hpy
 from data_utils import BOWEncoding, WordTokenDataset
 from nltk.tokenize.regexp import WordPunctTokenizer
 from torch.utils.data import DataLoader
@@ -36,7 +37,7 @@ class Model(nn.Module):
         return predictions
 
 
-def train(model, criterion, optimizer, dataset, data_loader, epochs, log=True):
+def train(model, criterion, optimizer, dataset, data_loader, epochs, hp, log=True):
     train_losses = []
     print_every = 1
     train_loss_estimator_size = 10000
@@ -75,16 +76,23 @@ def train(model, criterion, optimizer, dataset, data_loader, epochs, log=True):
             print(f'Training Loss: {train_loss.item()}')
             print()
 
+            h = hp.heap()
+            print(h)
+            print()
+
     return train_losses
 
 
-def train_multiple(hyperparams_list, train_dataset, valid_dataset, encoding, epochs):
+def train_multiple(hyperparams_list, train_dataset, valid_dataset, encoding, epochs, hp):
     models = []
     train_losses_list = []
     valid_losses = []
 
     for i, hyperparams in enumerate(hyperparams_list):
         print(f'Starting training Model {i+1} / {len(hyperparams_list)}...')
+
+        print(hp.heap())
+        print()
 
         start_time = time.time()
 
@@ -116,7 +124,8 @@ def train_multiple(hyperparams_list, train_dataset, valid_dataset, encoding, epo
                              optimizer,
                              train_dataset,
                              data_loader,
-                             epochs)
+                             epochs,
+                             hp)
 
         # 5. Calculate Validation Loss
 
@@ -188,9 +197,14 @@ def top_k_labeling_errors(confusion_matrix, category_decoder, k):
 
 
 def main():
+    hp = hpy()
+    hp.setrelheap()
+
     print('Loading and setting up the data...')
 
     data = pd.read_json('./data/train_data.json', orient='records')
+    data = data.sample(frac=1)
+
     train_test_split = 0.95
     split_idx = math.floor(len(data) * train_test_split)
 
@@ -206,6 +220,10 @@ def main():
     valid_dataset = WordTokenDataset(valid_data, encoding)
     valid_dataset.prepare()
 
+    print('Done setting up data')
+    print(hp.heap())
+    print()
+
     print('Training...')
 
     hyperparams_list = [
@@ -219,7 +237,8 @@ def main():
                                                            train_dataset,
                                                            valid_dataset,
                                                            encoding,
-                                                           epochs=EPOCHS)
+                                                           epochs=EPOCHS,
+                                                           hp=hp)
 
     print('Viewing results of training...')
     best_model_idx = torch.argmin(torch.FloatTensor(valid_losses)).item()

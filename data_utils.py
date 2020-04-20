@@ -91,6 +91,7 @@ class BOWEncoding():
         self._label_decoder = None
         self._token_encoder = None
         self._token_decoder = None
+        self._longest_sequence = None
 
     def prepare(self):
         tokenized_rows = tokenize_rows(self.data)
@@ -108,6 +109,7 @@ class BOWEncoding():
         self._token_encoder = {t: i for i,
                                t in enumerate(unigram_counts.keys())}
         self._token_decoder = {i: t for t, i in self._token_encoder.items()}
+        self._longest_sequence = max([len(ts) for ts in tokenized_rows])
 
         self.vocab_size = len(unigram_counts)
 
@@ -137,6 +139,11 @@ class BOWEncoding():
         assert(self._is_prepared)
         return token in self._token_encoder
 
+    @property
+    def longest_sequence(self):
+        assert(self._is_prepared)
+        return self._longest_sequence
+
 
 class WordEmbeddingEncoding():
     encoding_type = 'embedding'
@@ -152,6 +159,7 @@ class WordEmbeddingEncoding():
         self._unigram_counts = None
         self._token_encoder = None
         self._label_encoder = None
+        self._longest_sequence = None
 
     def prepare(self):
         self._embedding_tokens = {t for t in self.embeddings.index}
@@ -171,6 +179,7 @@ class WordEmbeddingEncoding():
                                t in enumerate(self.embeddings.index)}
         self._label_encoder = {l: i for i, l in enumerate(
             self.data['category'].unique())}
+        self._longest_sequence = max([len(ts) for ts in tokenized_rows])
 
         self._is_prepared = True
 
@@ -200,6 +209,10 @@ class WordEmbeddingEncoding():
             return False
         return True
 
+    @property
+    def longest_sequence(self):
+        assert(self._is_prepared)
+        return self._longest_sequence
 
 
 class WordTokenDatasetSample():
@@ -282,6 +295,15 @@ class WordTokenDatasetSample():
             weights[start:end] = tf_idf / total
 
         return weights
+
+    @property
+    def longest_sequence(self):
+        offset_with_end = torch.cat(
+            [self.offset, torch.LongTensor([len(self.sequence)])]).tolist()
+        sequence_lens = [offset_with_end[i+1] - offset for i,
+                         offset in enumerate(offset_with_end[:-1])]
+        return max(sequence_lens)
+
 
 
 class WordTokenDataset(Dataset):
